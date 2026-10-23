@@ -25,3 +25,6 @@ build/
 
 # macOS
 .DS_Store
+
+# project specific
+/midi files

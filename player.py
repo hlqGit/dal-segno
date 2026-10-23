@@ -8,7 +8,7 @@ running = True
 
 # ------ VARIABLES DEFINED HERE ------
 
-music_filepath = "midi files/chpn_op23.mid"
+music_filepath = "midi files/clair-de-lune-debussy.mid"
 
 # play music event 
 PLAY_MUSIC_EVENT = pygame.USEREVENT + 1
