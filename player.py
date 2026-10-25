@@ -8,23 +8,20 @@ running = True
 
 # ------ VARIABLES DEFINED HERE ------
 
-music_filepath = "midi files/clair-de-lune-debussy.mid"
+music_filepath = "midi files/chpn_op23.mid"
+music_save_path = "midi files/play.mid"
 
-# play music event 
 PLAY_MUSIC_EVENT = pygame.USEREVENT + 1
 
-# --- RENDERING VARS --- 
-
-scroll_speed = 300
-
-# ----------------------
+scroll_speed = 400
+start_delay = 2
 
 white_key_width = screen.get_width()//52
 white_key_height = 125
 key_gap = 1
 
 black_key_width = white_key_width - 12
-black_key_height = 75
+black_key_height = 85
 black_key_pattern = [1, 1, 0, 1, 1, 1, 0]
 
 screen_height = screen.get_height()
@@ -52,9 +49,9 @@ falling_block_black = "indianred4"
 
 # ---------------------------------
 
-pygame.mixer.music.load(music_filepath)
-pygame.time.set_timer(PLAY_MUSIC_EVENT, 3000)
-extracted_notes = audioproc.extract_notes(music_filepath)
+extracted_notes = audioproc.extract_notes(music_filepath, music_save_path, start_delay)
+pygame.mixer.music.load("midi files/play.mid")
+pygame.time.set_timer(PLAY_MUSIC_EVENT, 500)
 
 # pre-calculate white keys
 for i in range(52):
@@ -113,6 +110,7 @@ while running:
                 pygame.draw.rect(screen, falling_block_black, (x_pos, y_pos, note_width, note_height), 0, 3)
     # -----------------------------------------------
 
+    # gets all the current active notes to draw active (pressed) keys
     active_pitches = set()
     for note in extracted_notes:
         if note['start'] <= current_time <= (note['start'] + note['duration']):
