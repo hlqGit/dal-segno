@@ -155,9 +155,14 @@ Args:
     out_path (string): Where to save the wav file
     pedal (list): (time, is_down) tuples from audioproc.extract_pedal(), if any
     progress (function): Called every 100 notes with the fraction done (0 to 1), if given
+    speed (float): Tempo multiplier, 0.5 is half speed. Notes keep their natural pitch and sound
 """
 # ponytail: linear scan of every pedal interval per note, bisect if rendering gets slow
-def render_song(samples, notes, out_path, pedal=(), progress=None):
+def render_song(samples, notes, out_path, pedal=(), progress=None, speed=1.0):
+    # a different tempo just moves the notes in time, the samples themselves aren't stretched
+    notes = [{**note, 'start': note['start'] / speed, 'duration': note['duration'] / speed} for note in notes]
+    pedal = [(time / speed, is_down) for time, is_down in pedal]
+
     notes = apply_pedal(notes, pedal)
     end = max(note['start'] + note['duration'] for note in notes) + RELEASE
     buffer = np.zeros((int(end * SAMPLE_RATE) + 2, 2), dtype=np.float32)
@@ -252,6 +257,13 @@ if __name__ == "__main__":
     render_song(samples, [{'pitch': 60, 'start': 0.0, 'duration': 1.0, 'velocity': 100}], path, pedal=[(0.5, True), (3.0, False)])
     with wave.open(path, "rb") as wav:
         assert abs(wav.getnframes() - int((3.0 + RELEASE) * SAMPLE_RATE)) < 5
+
+    # speed moves notes in time: a 1s note at 2x is 0.5s long, at 0.5x it is 2s long
+    one_note = [{'pitch': 60, 'start': 1.0, 'duration': 1.0, 'velocity': 100}]
+    for speed, seconds in ((2.0, 1.0), (0.5, 4.0)):
+        render_song(samples, one_note, path, speed=speed)
+        with wave.open(path, "rb") as wav:
+            assert abs(wav.getnframes() - int((seconds + RELEASE) * SAMPLE_RATE)) < 5
 
     # lots of loud overlapping notes get turned down instead of clipping
     pile = [{'pitch': 60, 'start': 0, 'duration': 1.0, 'velocity': 127} for _ in range(20)]

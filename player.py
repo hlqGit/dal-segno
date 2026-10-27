@@ -11,13 +11,15 @@ running = True
 
 # ------ VARIABLES DEFINED HERE ------
 
-music_filepath = "midi files/dreiton.mid"
-music_save_path = "midi files/playc.mid"
-wav_path = "midi files/playc.wav"
+music_filepath = "midi files/winter wind.mid"
+music_save_path = "midi files/play.mid"
+speeds = [0.5, 0.75, 1.0, 1.25, 1.5]
+speed = 1.0  # the speed that is playing now
+pending_speed = 1.0  # the speed picked with up/down, applied with Enter
 
 PLAY_MUSIC_EVENT = pygame.USEREVENT + 1
 
-scroll_speed = 400
+scroll_speed = 500
 start_delay = 2
 paused = False
 seek_step = 2  # seconds jumped by the left and right keys
@@ -61,36 +63,51 @@ seek_bar_progress = "crimson"
 
 extracted_notes = audioproc.extract_notes(music_filepath, music_save_path, start_delay)
 song_length = max(note['start'] + note['duration'] for note in extracted_notes)
-if not os.path.exists(wav_path) or os.path.getmtime(wav_path) < os.path.getmtime(music_filepath):
-    loading_font = pygame.font.Font(None, 64)
 
-    def show_loading(fraction):
-        pygame.event.pump()
-        screen.fill(background)
-        text = loading_font.render(f"Loading... {fraction:.0%}", True, "black")
-        screen.blit(text, text.get_rect(center=screen.get_rect().center))
-        pygame.display.flip()
+note_gap = 0.04  # seconds shaved off the end of every note so repeated notes show a gap
+for note in extracted_notes:
+    note['visual_duration'] = note['duration'] - min(note_gap, note['duration'] * 0.3)
 
-    show_loading(0)
-    render.render_song(render.load_samples(), extracted_notes, wav_path,
-                       audioproc.extract_pedal(music_filepath, start_delay), show_loading)
-song_audio = render.load_wav(wav_path)
+loading_font = pygame.font.Font(None, 64)
+
+def show_loading(fraction):
+    pygame.event.pump()
+    screen.fill(background)
+    text = loading_font.render(f"Loading... {fraction:.0%}", True, "black")
+    screen.blit(text, text.get_rect(center=screen.get_rect().center))
+    pygame.display.flip()
+
+# each song and speed gets its own cached wav
+def wav_path_for(speed):
+    return f"{os.path.splitext(music_filepath)[0]}_{speed}x.wav"
+
+# loads the wav for a speed, rendering it first if it isn't cached yet
+def load_song(speed):
+    path = wav_path_for(speed)
+    if not os.path.exists(path) or os.path.getmtime(path) < os.path.getmtime(music_filepath):
+        show_loading(0)
+        render.render_song(render.load_samples(), extracted_notes, path,
+                           audioproc.extract_pedal(music_filepath, start_delay), show_loading, speed)
+    return render.load_wav(path)
+
+song_audio = load_song(speed)
 song_playing = False  # becomes True once the start timer fires
 base_time = 0.0  # song position (seconds) when the clock last restarted
 base_tick = 0  # pygame ticks at that moment
+song_channel = pygame.mixer.Channel(0)  # placeholder until play_from() starts the song
 
 # the song clock only moves while the music is playing and not paused
 def get_song_time():
     if not song_playing or paused:
         return base_time
-    return base_time + (pygame.time.get_ticks() - base_tick) / 1000.0
+    return min(base_time + (pygame.time.get_ticks() - base_tick) / 1000.0 * speed, song_total_length)
 
 # plays the song from a position in seconds and restarts the clock there
 def play_from(seconds):
     global song_sound, song_channel, base_time, base_tick, song_playing
     if song_playing:
         song_channel.stop()  # otherwise every seek adds another copy of the song
-    song_sound =pygame.mixer.Sound(buffer=song_audio[int(seconds * render.SAMPLE_RATE):])
+    song_sound =pygame.mixer.Sound(buffer=song_audio[int(seconds / speed * render.SAMPLE_RATE):])
     song_channel = song_sound.play()
     base_time, base_tick, song_playing = seconds, pygame.time.get_ticks(), True
     if paused:
@@ -132,6 +149,8 @@ while running:
             pygame.time.set_timer(PLAY_MUSIC_EVENT, 0)
 
         elif event.type == pygame.KEYDOWN:
+
+            # pause buttons 
             if event.key == pygame.K_SPACE and song_playing:
                 if paused:
                     song_channel.unpause()
@@ -140,12 +159,36 @@ while running:
                     base_time = get_song_time()
                     song_channel.pause()
                 paused = not paused
+
+            # n
             elif event.key == pygame.K_n:
-                print('n')
+                print('norford')
+
+            # handle seeking
             elif event.key in (pygame.K_LEFT, pygame.K_RIGHT) and song_playing:
                 direction = 1 if event.key == pygame.K_RIGHT else -1
                 new_time = min(max(get_song_time() + direction * seek_step, 0), song_length)
                 play_from(new_time)
+
+            # handle speed up and down
+            elif event.key in (pygame.K_UP, pygame.K_DOWN):
+                i = speeds.index(pending_speed) + (1 if event.key == pygame.K_UP else -1)
+                pending_speed = speeds[min(max(i, 0), len(speeds) - 1)]
+
+            # set pending speed equal to speed (lock in speed) and render if needed
+            elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER) and song_playing and pending_speed != speed:
+                position = min(get_song_time(), song_length)
+                song_channel.stop()
+                song_audio = load_song(pending_speed)
+                speed = pending_speed
+                play_from(position)  
+
+            # cancel pending speed
+            elif event.key == pygame.K_ESCAPE:
+                pending_speed = speed
+
+            elif event.key == pygame.K_r:
+                play_from(0)
 
     # fill the screen with a color to wipe away anything from last frame
     screen.fill(background)
@@ -157,8 +200,8 @@ while running:
     current_time = get_song_time()
 
     for note in extracted_notes:
-        if current_time < note['start'] + note['duration']:
-            note_height = note['duration'] * scroll_speed
+        if current_time < note['start'] + note['visual_duration']:
+            note_height = note['visual_duration'] * scroll_speed
             distance_to_key = (note['start'] - current_time) * scroll_speed
 
             y_pos = hit_line_y - distance_to_key - note_height
@@ -166,15 +209,15 @@ while running:
             note_width = pitch_data[note['pitch']]['w']
 
             if note['pitch'] in white_notes:
-                pygame.draw.rect(screen, falling_block_white, (x_pos, y_pos, note_width, note_height), 0, 3)
+                pygame.draw.rect(screen, falling_block_white, (x_pos + 1, y_pos, note_width - 2, note_height), 0, 3)
             else:
-                pygame.draw.rect(screen, falling_block_black, (x_pos, y_pos, note_width, note_height), 0, 3)
+                pygame.draw.rect(screen, falling_block_black, (x_pos + 1, y_pos, note_width - 2, note_height), 0, 3)
     # -----------------------------------------------
 
     # gets all the current active notes to draw active (pressed) keys
     active_pitches = set()
     for note in extracted_notes:
-        if note['start'] <= current_time <= (note['start'] + note['duration']):
+        if note['start'] <= current_time < (note['start'] + note['visual_duration']):
             active_pitches.add(note['pitch'])
 
     # ----------- DRAW THE KEYS HERE -----------
@@ -234,6 +277,17 @@ while running:
     except:
         pass
     # ------------------------
+
+    # ------- SPEED -------
+    if speed == pending_speed:
+        speed_text = f"{speed}x"
+        speed_text_surface = seek_bar_font.render(speed_text, True, seek_bar)
+        screen.blit(speed_text_surface, (20, 70))
+    else:
+        speed_text = f"{speed}x -> {pending_speed}x (press enter to confirm)"
+        speed_text_surface = seek_bar_font.render(speed_text, True, seek_bar_progress)
+        screen.blit(speed_text_surface, (20, 70))
+    # ---------------------
 
     pygame.display.flip()
     dt = clock.tick(60) / 1000
