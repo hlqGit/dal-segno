@@ -1,6 +1,9 @@
+import os
 import pygame
 import audioproc
+import render
 
+pygame.mixer.pre_init(render.SAMPLE_RATE, -16, 2)
 pygame.init()
 screen = pygame.display.set_mode((1280, 720))
 clock = pygame.time.Clock()
@@ -8,13 +11,17 @@ running = True
 
 # ------ VARIABLES DEFINED HERE ------
 
-music_filepath = "midi files/chpn_op23.mid"
-music_save_path = "midi files/play.mid"
+music_filepath = "midi files/dreiton.mid"
+music_save_path = "midi files/playc.mid"
+wav_path = "midi files/playc.wav"
 
 PLAY_MUSIC_EVENT = pygame.USEREVENT + 1
 
 scroll_speed = 400
 start_delay = 2
+paused = False
+seek_step = 2  # seconds jumped by the left and right keys
+seek_bar_font = pygame.font.Font(None, 30)
 
 white_key_width = screen.get_width()//52
 white_key_height = 125
@@ -47,10 +54,48 @@ black_press_color = "cyan4"
 falling_block_white = "lightcoral"
 falling_block_black = "indianred4"
 
+seek_bar = "black"
+seek_bar_progress = "crimson"
+
 # ---------------------------------
 
 extracted_notes = audioproc.extract_notes(music_filepath, music_save_path, start_delay)
-pygame.mixer.music.load("midi files/play.mid")
+song_length = max(note['start'] + note['duration'] for note in extracted_notes)
+if not os.path.exists(wav_path) or os.path.getmtime(wav_path) < os.path.getmtime(music_filepath):
+    loading_font = pygame.font.Font(None, 64)
+
+    def show_loading(fraction):
+        pygame.event.pump()
+        screen.fill(background)
+        text = loading_font.render(f"Loading... {fraction:.0%}", True, "black")
+        screen.blit(text, text.get_rect(center=screen.get_rect().center))
+        pygame.display.flip()
+
+    show_loading(0)
+    render.render_song(render.load_samples(), extracted_notes, wav_path,
+                       audioproc.extract_pedal(music_filepath, start_delay), show_loading)
+song_audio = render.load_wav(wav_path)
+song_playing = False  # becomes True once the start timer fires
+base_time = 0.0  # song position (seconds) when the clock last restarted
+base_tick = 0  # pygame ticks at that moment
+
+# the song clock only moves while the music is playing and not paused
+def get_song_time():
+    if not song_playing or paused:
+        return base_time
+    return base_time + (pygame.time.get_ticks() - base_tick) / 1000.0
+
+# plays the song from a position in seconds and restarts the clock there
+def play_from(seconds):
+    global song_sound, song_channel, base_time, base_tick, song_playing
+    if song_playing:
+        song_channel.stop()  # otherwise every seek adds another copy of the song
+    song_sound =pygame.mixer.Sound(buffer=song_audio[int(seconds * render.SAMPLE_RATE):])
+    song_channel = song_sound.play()
+    base_time, base_tick, song_playing = seconds, pygame.time.get_ticks(), True
+    if paused:
+        song_channel.pause()
+
 pygame.time.set_timer(PLAY_MUSIC_EVENT, 500)
 
 # pre-calculate white keys
@@ -79,9 +124,28 @@ while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
+
         elif event.type == PLAY_MUSIC_EVENT:
-            pygame.mixer.music.play()
+            play_from(0)
+            song_total_length = song_sound.get_length()
+            song_minutes, song_seconds = divmod(song_total_length, 60)
             pygame.time.set_timer(PLAY_MUSIC_EVENT, 0)
+
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_SPACE and song_playing:
+                if paused:
+                    song_channel.unpause()
+                    base_tick = pygame.time.get_ticks()
+                else:
+                    base_time = get_song_time()
+                    song_channel.pause()
+                paused = not paused
+            elif event.key == pygame.K_n:
+                print('n')
+            elif event.key in (pygame.K_LEFT, pygame.K_RIGHT) and song_playing:
+                direction = 1 if event.key == pygame.K_RIGHT else -1
+                new_time = min(max(get_song_time() + direction * seek_step, 0), song_length)
+                play_from(new_time)
 
     # fill the screen with a color to wipe away anything from last frame
     screen.fill(background)
@@ -90,10 +154,7 @@ while running:
     pygame.draw.rect(screen, "black", (0, screen_height - white_key_height, screen_width, white_key_height))
 
     # ---------- FALLING BLOCKS DRAWN HERE ----------
-    try:
-        current_time = pygame.mixer.music.get_pos() / 1000.0
-    except:
-        current_time = 0
+    current_time = get_song_time()
 
     for note in extracted_notes:
         if current_time < note['start'] + note['duration']:
@@ -145,7 +206,7 @@ while running:
             x_pos = int(seam) - (black_key_width // 2)
             
             pygame.draw.rect(screen, black_key_color,
-                            (x_pos, screen_height-white_key_height, black_key_width, black_key_height))
+                            (x_pos, screen_height-white_key_height, black_key_width, black_key_height), 0, 2)
 
     # draws the ACTIVE black keys of the piano
     for pitch in active_pitches:
@@ -154,9 +215,25 @@ while running:
             x_pos = pitch_data[pitch]['x']
             key_w = pitch_data[pitch]['w']
             pygame.draw.rect(screen, black_press_color, 
-                            (x_pos, screen_height - white_key_height, key_w, black_key_height))
+                            (x_pos, screen_height - white_key_height, key_w, black_key_height), 0, 2)
     
     # ------------------------------------------
+
+    # ------- SEEK BAR -------
+    pygame.draw.rect(screen, seek_bar, (0, 0, screen_width, 20))
+    try:
+        pygame.draw.rect(screen, seek_bar_progress, 
+                        (0, 0, screen_width*(current_time/song_total_length), 20))
+    except:
+        pass
+    song_current_time_min, song_current_time_sec = divmod(current_time, 60)
+    try:
+        seek_text = f"{int(song_current_time_min):02} : {int(song_current_time_sec):02}  /  {int(song_minutes):02} : {int(song_seconds):02}"
+        text_surface = seek_bar_font.render(seek_text, True, seek_bar)
+        screen.blit(text_surface, (20, 40))
+    except:
+        pass
+    # ------------------------
 
     pygame.display.flip()
     dt = clock.tick(60) / 1000
