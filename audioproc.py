@@ -9,7 +9,7 @@ Args:
     start_delay (int): The amount of delay to add to the beginning in seconds
 
 Returns:
-    list: list of dictionaries containing pitch, start, and duration
+    list: list of dictionaries containing pitch, start, duration, and velocity
 """
 def extract_notes(filepath, save_path, start_delay):
     midi_file = mido.MidiFile(filepath)
@@ -40,18 +40,42 @@ def extract_notes(filepath, save_path, start_delay):
 
         # checking for a note-on event
         if msg.type == 'note_on' and msg.velocity > 0:
-            active_notes[msg.note] = absolute_time
+            active_notes[msg.note] = (absolute_time, msg.velocity)
 
         # checking for a note-off event
         elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
             if msg.note in active_notes:
-                start_time = active_notes.pop(msg.note)
+                start_time, velocity = active_notes.pop(msg.note)
                 duration = absolute_time - start_time
 
                 parsed_notes.append({
                     'pitch': msg.note,
                     'start': start_time,
-                    'duration': duration
+                    'duration': duration,
+                    'velocity': velocity
                 })
 
     return parsed_notes
+
+"""
+Parses a midi file and returns the sustain pedal presses and releases
+
+Args:
+    filepath (string): The filepath of the midi file to parse
+    start_delay (int): The same start delay given to extract_notes, in seconds
+
+Returns:
+    list: list of (time, is_down) tuples, in seconds
+"""
+def extract_pedal(filepath, start_delay):
+    pedal_events = []
+    absolute_time = start_delay
+
+    for msg in mido.MidiFile(filepath):
+        absolute_time += msg.time
+
+        # control 64 is the sustain pedal, 64 and up means pressed
+        if msg.type == 'control_change' and msg.control == 64:
+            pedal_events.append((absolute_time, msg.value >= 64))
+
+    return pedal_events
